@@ -1,0 +1,15 @@
+# Stage 1: Obtener Docker CLI desde la imagen oficial
+FROM docker:24-cli AS docker-source
+
+# Stage 2: n8n con Docker CLI copiado
+FROM docker.n8n.io/n8nio/n8n
+
+USER root
+
+# Copiar el binario de docker desde la imagen oficial
+COPY --from=docker-source /usr/local/bin/docker /usr/local/bin/docker
+
+# Dar permisos de ejecución
+RUN chmod +x /usr/local/bin/docker
+
+USER node

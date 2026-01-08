@@ -1,0 +1,125 @@
+volumes:
+  db_storage:
+  n8n_storage:
+  redis_storage:
+  red_compartida:
+    driver: local
+    driver_opts:
+      type: cifs
+      o: username=${RED_USER},password=${RED_PASS},domain=${RED_DOMAIN},uid=1000,gid=1000,file_mode=0777,dir_mode=0777,vers=3.0
+      device: //${RED_HOST}/${RED_SHARE}
+
+x-shared: &shared
+  restart: unless-stopped
+  image: docker.n8n.io/n8nio/n8n
+  environment:
+    - N8N_SECURE_COOKIE=false
+
+    # --- Permitir acceso a los recursos de la carpeta compartida ---
+    - N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES=false
+
+    - NODES_EXCLUDE=[]
+
+    - N8N_RESTRICT_FILE_ACCESS_TO=/data/compartido
+
+    # --- Conexión a la Base de Datos ---
+    - DB_TYPE=postgresdb
+    - DB_POSTGRESDB_HOST=postgres
+    - DB_POSTGRESDB_PORT=5432
+    - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+    - DB_POSTGRESDB_USER=${POSTGRES_USER}
+    - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    
+    # --- Configuración de Cola con Redis ---
+    - EXECUTIONS_MODE=queue
+    - QUEUE_BULL_REDIS_HOST=redis
+    - QUEUE_HEALTH_CHECK_ACTIVE=true
+    
+    # --- Variables de Entorno Recomendadas ---
+    - N8N_ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    - GENERIC_TIMEZONE=America/Bogota
+    - TZ=America/Bogota
+    - N8N_RUNNERS_ENABLED=false
+    - EXECUTIONS_DATA_PRUNE=true
+    - EXECUTIONS_DATA_MAX_AGE=30
+    - WEBHOOK_URL=https://n8n-prexxa.duckdns.org/
+
+  volumes:
+    - n8n_storage:/home/node/.n8n
+    - /d/n8n_compartido:/data/compartido
+    - /d/n8n_docker/ssh_keys:/home/node/.ssh
+    - /etc/localtime:/etc/localtime:ro  
+    - /etc/timezone:/etc/timezone:ro    
+    - red_compartida:/data/Servicios_Compartidos:ro
+    
+  depends_on:
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+    volumes:
+      - db_storage:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:6-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_storage:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  n8n:
+    <<: *shared 
+    ports:
+      - "5678:5678"
+    networks:
+      - default
+      - n8n-evo-net
+
+  n8n-worker:
+    <<: *shared
+    command: worker
+    depends_on:
+      - n8n
+    networks:
+      - default
+      - n8n-evo-net
+
+  python:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "5010:5000"
+    networks:
+      - default
+      - n8n-evo-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    environment:
+      - TZ=America/Bogota
+
+networks:
+  n8n-evo-net:
+    external: true
