@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-Python Worker - Ejecución efímera para n8n
-Entrada: JSON vía stdin
-Salida: JSON vía stdout
-"""
-
 import sys
 import io
 import json
@@ -12,45 +6,37 @@ import traceback
 
 def main():
     try:
-        # Leer entrada desde stdin
         input_data = sys.stdin.read()
         
         if not input_data.strip():
-            raise ValueError("No se recibió ningún dato en stdin")
+            raise ValueError("No input data")
         
-        # Parsear JSON
         data = json.loads(input_data)
         code = data.get('code', '')
+        clientes = data.get('clientes', [])
         
         if not code:
-            raise ValueError("No se proporcionó código Python en el campo 'code'")
+            raise ValueError("No code provided")
         
-        # Capturar stdout
         stdout_capture = io.StringIO()
         sys.stdout = stdout_capture
         
-        # Entorno de ejecución
-        exec_globals = {}
+        exec_globals = {'clientes': clientes}
         exec_locals = {}
         
-        # Ejecutar el código
         exec(code, exec_globals, exec_locals)
         
-        # Restaurar stdout
         sys.stdout = sys.__stdout__
         output = stdout_capture.getvalue()
         
-        # Obtener resultado
-        execution_result = exec_locals.get('result', None)
+        result = exec_locals.get('result', None)
         
-        # Construir respuesta
         response = {
             "success": True,
-            "result": execution_result,
+            "result": result,
             "output": output
         }
         
-        # Imprimir como JSON en stdout
         print(json.dumps(response, ensure_ascii=False))
         sys.exit(0)
         
