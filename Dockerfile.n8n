@@ -6,10 +6,11 @@ FROM docker.n8n.io/n8nio/n8n
 
 USER root
 
-# Copiar el binario de docker desde la imagen oficial
+# 1. Copiar el binario de docker (Lo que ya tenías)
 COPY --from=docker-source /usr/local/bin/docker /usr/local/bin/docker
-
-# Dar permisos de ejecución
 RUN chmod +x /usr/local/bin/docker
 
+RUN npm install -g ldapjs
+
+# Volver al usuario seguro
 USER node

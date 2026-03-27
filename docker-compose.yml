@@ -1,14 +1,3 @@
-volumes:
-  db_storage:
-  n8n_storage:
-  redis_storage:
-  red_compartida:
-    driver: local
-    driver_opts:
-      type: cifs
-      o: username=${RED_USER},password=${RED_PASS},domain=${RED_DOMAIN},uid=1000,gid=1000,file_mode=0777,dir_mode=0777,vers=3.0
-      device: //${RED_HOST}/${RED_SHARE}
-
 x-shared: &shared
   restart: unless-stopped
   build:
@@ -17,28 +6,27 @@ x-shared: &shared
   user: root
   environment:
     - N8N_SECURE_COOKIE=false
+    - NODE_FUNCTION_ALLOW_EXTERNAL=ldapjs
 
-    # --- Permitir acceso a los recursos de la carpeta compartida ---
+    # --- Permitir acceso a recursos ---
     - N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES=false
-
     - NODES_EXCLUDE=[]
-
     - N8N_RESTRICT_FILE_ACCESS_TO=/data/compartido
 
-    # --- Conexión a la Base de Datos ---
+    # --- DB interna de n8n ---
     - DB_TYPE=postgresdb
     - DB_POSTGRESDB_HOST=postgres
     - DB_POSTGRESDB_PORT=5432
     - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
     - DB_POSTGRESDB_USER=${POSTGRES_USER}
     - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-    
-    # --- Configuración de Cola con Redis ---
+
+    # --- Cola Redis ---
     - EXECUTIONS_MODE=queue
     - QUEUE_BULL_REDIS_HOST=redis
     - QUEUE_HEALTH_CHECK_ACTIVE=true
-    
-    # --- Variables de Entorno Recomendadas ---
+
+    # --- Recomendadas ---
     - N8N_ENCRYPTION_KEY=${ENCRYPTION_KEY}
     - GENERIC_TIMEZONE=America/Bogota
     - TZ=America/Bogota
@@ -48,21 +36,32 @@ x-shared: &shared
     - WEBHOOK_URL=https://n8n-prexxa.duckdns.org/
 
   volumes:
-    - n8n_storage:/home/node/.n8n
+    # Persistencia n8n (bind mount)
+    - ./data_n8n:/home/node/.n8n
+
+    # Compartidos (ojo: esto es ruta WSL; si te falla en Windows, lo ajustamos)
     - /d/n8n_compartido:/data/compartido
-    - /d/n8n_docker/ssh_keys:/home/node/.ssh
-    - /etc/localtime:/etc/localtime:ro  
-    - /etc/timezone:/etc/timezone:ro    
-    - red_compartida:/data/Servicios_Compartidos:ro
+
+    # SSH keys
+    # - ./ssh_keys:/home/node/.ssh:ro
+
+    # Hora
+    - /etc/localtime:/etc/localtime:ro
+    - /etc/timezone:/etc/timezone:ro
+
+    # Docker socket
     - /var/run/docker.sock:/var/run/docker.sock
-    
+
   depends_on:
     redis:
       condition: service_healthy
     postgres:
       condition: service_healthy
+    pgbouncer:
+      condition: service_started
 
 services:
+  # DB interna de n8n
   postgres:
     image: postgres:16
     restart: unless-stopped
@@ -71,49 +70,51 @@ services:
       - POSTGRES_PASSWORD
       - POSTGRES_DB
     volumes:
-      - db_storage:/var/lib/postgresql/data
+      - ./data_postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      test: ["CMD-SHELL", "pg_isready -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  # Redis para queue
   redis:
     image: redis:6-alpine
     restart: unless-stopped
     volumes:
-      - redis_storage:/data
+      - ./data_redis:/data
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  # Proxy mTLS REAL (Postgres protocol) hacia 10.50.7.4:5432
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    volumes:
+      - ./pgbouncer:/etc/pgbouncer:ro
+      - ./certs:/certs:ro
+
+  # n8n main
   n8n:
-    <<: *shared 
+    <<: *shared
     ports:
       - "5678:5678"
-    networks:
-      - default
-      - n8n-evo-net
 
+  # n8n worker
   n8n-worker:
     <<: *shared
     command: worker
     depends_on:
       - n8n
-    networks:
-      - default
-      - n8n-evo-net
 
-  python-worker-builder:
-    build:
-      context: ./python
-      dockerfile: Dockerfile
-    image: py-worker:latest
-    command: echo "Imagen py-worker:latest construida exitosamente"
-    restart: "no"
-
-networks:
-  n8n-evo-net:
-    external: true
+  # builder python worker (si lo usas)
+  # python-worker-builder:
+  #   build:
+  #     context: ./python
+  #     dockerfile: Dockerfile
+  #   image: py-worker:latest
+  #   command: echo "Imagen py-worker:latest construida exitosamente"
+  #   restart: "no"
