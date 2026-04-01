@@ -7,6 +7,9 @@ x-shared: &shared
   environment:
     - N8N_SECURE_COOKIE=false
     - NODE_FUNCTION_ALLOW_EXTERNAL=ldapjs
+    - NODE_FUNCTION_ALLOW_BUILTIN=fs
+    - N8N_DEFAULT_PROJECT_ENABLED=true
+    - N8N_ENTERPRISE_FEATURES_ENABLED=true
 
     # --- Permitir acceso a recursos ---
     - N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES=false
@@ -40,7 +43,7 @@ x-shared: &shared
     - ./data_n8n:/home/node/.n8n
 
     # Compartidos (ojo: esto es ruta WSL; si te falla en Windows, lo ajustamos)
-    - /d/n8n_compartido:/data/compartido
+    - /d/n8n/n8n_compartido:/data/compartido
 
     # SSH keys
     # - ./ssh_keys:/home/node/.ssh:ro

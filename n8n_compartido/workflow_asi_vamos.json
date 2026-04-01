@@ -1,0 +1,147 @@
+{
+  "name": "Así Vamos – Envío Mensual",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 13-15 * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "d1a2b3c4-e5f6-7890-abcd-ef1234567890",
+      "name": "Trigger Mensual",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── Verificar si hoy es el día de envío correcto ───────────────────────\n// Cron dispara Lun–Vie en días 13, 14, 15.\n// Solo continuamos si hoy es el día ajustado del 15:\n//   15 cae Sábado → enviamos el viernes 14\n//   15 cae Domingo → enviamos el viernes 13\n//   15 cae hábil  → enviamos el 15\n\nconst tz   = 'America/Bogota';\nconst now  = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));\nconst hoy  = now.getDate();\nconst mes  = now.getMonth();    // 0-indexed\nconst anio = now.getFullYear();\n\nconst dia15 = new Date(anio, mes, 15);\nconst dow15 = dia15.getDay();   // 0 = Dom, 6 = Sáb\n\nlet diaEnvio;\nif      (dow15 === 6) diaEnvio = 14;  // Sábado  → viernes 14\nelse if (dow15 === 0) diaEnvio = 13;  // Domingo → viernes 13\nelse                  diaEnvio = 15;  // Hábil   → 15\n\nif (hoy !== diaEnvio) return [];  // No es el día → detener ejecución\n\nreturn [{ json: { diaEnvio, mes: mes + 1, anio } }];"
+      },
+      "id": "a2b3c4d5-e6f7-8901-bcde-f12345678901",
+      "name": "Verificar día de envío",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    \"Nit\",\n    \"Cliente\",\n    SUM(CASE WHEN \"Anio\" = 2024 THEN \"Venta\" ELSE 0 END) AS ventas_2024,\n    SUM(CASE WHEN \"Anio\" = 2025 THEN \"Venta\" ELSE 0 END) AS ventas_2025,\n    SUM(CASE WHEN \"Anio\" = 2026 THEN \"Venta\" ELSE 0 END) AS ventas_2026\nFROM data_services.\"asi_vamos_clientes_hist_vtas_CIAS\"\nGROUP BY \"Nit\", \"Cliente\"\nORDER BY \"Cliente\"",
+        "options": {}
+      },
+      "id": "b3c4d5e6-f7a8-9012-cdef-123456789012",
+      "name": "Obtener ventas por cliente",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [680, 300],
+      "credentials": {
+        "postgres": {
+          "id": "REEMPLAZAR_CON_ID_CREDENCIAL_POSTGRES",
+          "name": "DW_QPREX (pgbouncer)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── Preparar JSON payload para el py-worker ───────────────────────────\nconst fs = require('fs');\n\nconst code = fs.readFileSync('/data/compartido/grafica_asi_vamos_worker.py', 'utf8');\nconst item = $input.item.json;\n\nconst payload = {\n  code,\n  nombre_cliente: item.Cliente,\n  ventas_2024:    parseFloat(item.ventas_2024) || 0,\n  ventas_2025:    parseFloat(item.ventas_2025) || 0,\n  ventas_2026:    parseFloat(item.ventas_2026) || 0\n};\n\n// Nombre único para evitar colisiones entre ejecuciones paralelas\nconst tempFile = `payload_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;\nfs.writeFileSync(`/data/compartido/${tempFile}`, JSON.stringify(payload));\n\nreturn [{\n  json: {\n    tempFile,\n    cliente:     item.Cliente,\n    nit:         item.Nit,\n    ventas_2024: item.ventas_2024,\n    ventas_2025: item.ventas_2025,\n    ventas_2026: item.ventas_2026\n  }\n}];"
+      },
+      "id": "c4d5e6f7-a8b9-0123-defa-234567890123",
+      "name": "Preparar payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "command": "=docker run --rm -i py-worker:latest python worker.py < /data/compartido/{{ $json.tempFile }}; rm -f /data/compartido/{{ $json.tempFile }}"
+      },
+      "id": "d5e6f7a8-b9c0-1234-efab-345678901234",
+      "name": "Generar gráfica (worker)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── Parsear respuesta del worker y preparar imagen como binario ────────\nconst raw = $input.item.json;\n\nlet workerOut;\ntry {\n  workerOut = JSON.parse(raw.stdout);\n} catch (e) {\n  throw new Error('No se pudo parsear la respuesta del worker. stdout: ' + raw.stdout);\n}\n\nif (!workerOut.success) {\n  const prev = $('Preparar payload').item.json;\n  throw new Error(`Worker falló para \"${prev.cliente}\": ${workerOut.error}`);\n}\n\nconst prev = $('Preparar payload').item.json;\nconst nombreArchivo = `grafica_${prev.cliente.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]/g, '_')}.png`;\n\nreturn [{\n  json: {\n    cliente: prev.cliente,\n    nit:     prev.nit\n  },\n  binary: {\n    grafica: {\n      data:     workerOut.result,\n      mimeType: 'image/png',\n      fileName: nombreArchivo\n    }\n  }\n}];"
+      },
+      "id": "e6f7a8b9-c0d1-2345-fabc-456789012345",
+      "name": "Extraer imagen base64",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "REEMPLAZAR_CORREO_ORIGEN@prexxa.com",
+        "toEmail": "REEMPLAZAR_TU_CORREO@prexxa.com",
+        "subject": "=Así Vamos – {{ $json.cliente }}",
+        "emailType": "html",
+        "message": "=<p>Hola,</p><p>Adjunto encontrarás el comportamiento de ventas de <strong>{{ $json.cliente }}</strong> con Prexxa hasta el corte del presente mes.</p><p>Saludos,<br>Prexxa S.A.S</p>",
+        "options": {
+          "attachments": "grafica"
+        }
+      },
+      "id": "f7a8b9c0-d1e2-3456-abcd-567890123456",
+      "name": "Enviar email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1560, 300],
+      "credentials": {
+        "smtp": {
+          "id": "REEMPLAZAR_CON_ID_CREDENCIAL_SMTP",
+          "name": "SMTP Prexxa"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger Mensual": {
+      "main": [
+        [{ "node": "Verificar día de envío", "type": "main", "index": 0 }]
+      ]
+    },
+    "Verificar día de envío": {
+      "main": [
+        [{ "node": "Obtener ventas por cliente", "type": "main", "index": 0 }]
+      ]
+    },
+    "Obtener ventas por cliente": {
+      "main": [
+        [{ "node": "Preparar payload", "type": "main", "index": 0 }]
+      ]
+    },
+    "Preparar payload": {
+      "main": [
+        [{ "node": "Generar gráfica (worker)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Generar gráfica (worker)": {
+      "main": [
+        [{ "node": "Extraer imagen base64", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extraer imagen base64": {
+      "main": [
+        [{ "node": "Enviar email", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "timezone": "America/Bogota",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}
