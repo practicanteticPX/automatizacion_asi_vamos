@@ -1,5 +1,5 @@
 # Stage 1: Obtener Docker CLI desde la imagen oficial
-FROM docker:24-cli AS docker-source
+FROM docker:25-cli AS docker-source
 
 # Stage 2: n8n con Docker CLI copiado
 FROM docker.n8n.io/n8nio/n8n

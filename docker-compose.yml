@@ -7,7 +7,8 @@ x-shared: &shared
   environment:
     - N8N_SECURE_COOKIE=false
     - NODE_FUNCTION_ALLOW_EXTERNAL=ldapjs
-    - NODE_FUNCTION_ALLOW_BUILTIN=fs
+    - NODE_FUNCTION_ALLOW_BUILTIN=fs,child_process
+    - DOCKER_API_VERSION=1.44
     - N8N_DEFAULT_PROJECT_ENABLED=true
     - N8N_ENTERPRISE_FEATURES_ENABLED=true
 
